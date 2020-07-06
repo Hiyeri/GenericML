@@ -1,0 +1,236 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import os\n",
+    "import numpy as np\n",
+    "import pandas as pd\n",
+    "import matplotlib.pyplot as plt\n",
+    "import seaborn as sns\n",
+    "import math\n",
+    "\n",
+    "from sklearn.model_selection import train_test_split\n",
+    "from sklearn.ensemble import RandomForestRegressor\n",
+    "from sklearn.metrics import accuracy_score, balanced_accuracy_score, r2_score, mean_squared_log_error\n",
+    "from pandas.plotting import scatter_matrix\n",
+    "from sklearn.experimental import enable_iterative_imputer\n",
+    "from sklearn.impute import IterativeImputer\n",
+    "from sklearn.impute import SimpleImputer\n",
+    "from sklearn import preprocessing\n",
+    "from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder\n",
+    "from sklearn.model_selection import RandomizedSearchCV, GridSearchCV\n",
+    "\n",
+    "from sklearn.feature_selection import SelectKBest, f_regression, chi2"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 68,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def feature_selection_transformation(X, y, target, ordinal_feature):\n",
+    "    # check for numeric features train_data\n",
+    "    num_features = []\n",
+    "    cat_features = []\n",
+    "    for feature in X:\n",
+    "        if X[feature].dtypes == np.int or X[feature].dtypes == np.float:\n",
+    "            num_features.append(feature)\n",
+    "        else:\n",
+    "            cat_features.append(feature)\n",
+    "    \n",
+    "    X = X.reset_index()\n",
+    "    # impute using only numerical features\n",
+    "    imp = IterativeImputer(max_iter = 10, random_state = 42)\n",
+    "    imp.fit(X[num_features])\n",
+    "    X[num_features] = imp.transform(X[num_features])\n",
+    "    \n",
+    "    # impute using only categorical features\n",
+    "    imp = SimpleImputer(missing_values = np.nan, strategy = 'most_frequent')\n",
+    "    X[cat_features] = imp.fit_transform(X[cat_features].astype(str))\n",
+    "     \n",
+    "    # split dataframe into numeric and categorical data\n",
+    "    X_num = X.drop(cat_features, axis = 1)\n",
+    "    X_cat = X.drop(num_features, axis = 1)\n",
+    "    \n",
+    "    # saleprice correlation matrix\n",
+    "    k_num = round(len(X_num.columns) / 2)\n",
+    "    corrmat = X_num.corr()\n",
+    "    X_num_fs = corrmat.nlargest(k_num, target)[target].index\n",
+    "    \n",
+    "    # check for multicollinearity\n",
+    "    # if two features are strongly correlated with each other (>= 0.7) \n",
+    "    # the feature with the lower correlation with the target variable is dropped\n",
+    "    multicorr = {}\n",
+    "    k = len(corrmat)\n",
+    "    for feature in corrmat:\n",
+    "        i = 1\n",
+    "        if feature != target:\n",
+    "            while i < k - 1:\n",
+    "                if corrmat[feature][i] >= 0.7 and feature != corrmat.index[i]:\n",
+    "                    multicorr[feature] = corrmat.index[i], corrmat[feature][i]\n",
+    "                i = i + 1\n",
+    "        \n",
+    "    # delete duplicates\n",
+    "    corr_scores = []\n",
+    "    for feature in list(multicorr.keys()):\n",
+    "        if multicorr[feature][1] in corr_scores:\n",
+    "            del multicorr[feature]\n",
+    "        else:\n",
+    "            corr_scores.append(multicorr[feature][1])\n",
+    "            \n",
+    "    # remove the feature with the lower correlation coefficient (pearson)\n",
+    "    dropped_features = [] \n",
+    "    for feature1, feature2 in multicorr.items():\n",
+    "        if corrmat[target][feature1] < corrmat[target][feature2[0]]:\n",
+    "            dropped_features.append(feature1)\n",
+    "        else:\n",
+    "            dropped_features.append(feature2[0])\n",
+    "\n",
+    "    # drop the features from X_num dataframe\n",
+    "    for feature in X_num:\n",
+    "        if feature in dropped_features:\n",
+    "            X_num = X_num.drop(feature, axis = 1) \n",
+    "    X_num.drop(X_num.columns.difference(X_num_fs), 1, inplace = True)\n",
+    "    \n",
+    "    # encode ordinal features (dummy variables)\n",
+    "    ord_data = [ordinal_feature]\n",
+    "    X_num = pd.get_dummies(X_num, columns = ord_data, drop_first = True)\n",
+    "    \n",
+    "    # encode categorical features\n",
+    "    enc = OrdinalEncoder()\n",
+    "    enc.fit(X_cat)\n",
+    "    X_cat_enc = enc.transform(X_cat)\n",
+    "    \n",
+    "    # feature selection on categorical data\n",
+    "    k_cat = round(len(X_cat.columns) / 2)\n",
+    "    fs = SelectKBest(f_regression, k_cat)\n",
+    "    fs.fit(X_cat_enc, y) # save!!\n",
+    "    X_cat_fs = fs.transform(X_cat_enc)\n",
+    "    X_cat_enc = pd.DataFrame(X_cat_fs)\n",
+    "    \n",
+    "    # concatenate numerical and categorical features\n",
+    "    df_cat = pd.DataFrame(X_cat_enc, index = list(range(len(X.index))))\n",
+    "    df_num = pd.DataFrame(X_num, index = list(range(len(X.index))))\n",
+    "    X = pd.concat([df_cat, df_num], axis = 1, sort = False)\n",
+    "    X = X.drop([target], axis = 1)\n",
+    "    return X"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 74,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def predict():\n",
+    "    train_data = pd.read_csv(os.path.expanduser(\"~/Desktop/Projects/api/data/house-prices-advanced-regression-techniques/\" + \n",
+    "                                            \"train.csv\"))\n",
+    "    # select features and target variable\n",
+    "    features = list(train_data)\n",
+    "    X = train_data[features]\n",
+    "    y = train_data['SalePrice']\n",
+    "    target = 'SalePrice'\n",
+    "    \n",
+    "    feature_engineering = feature_selection_transformation(X, y, target, 'OverallQual')\n",
+    "    prediction = predict_randomforestregress(feature_engineering, y)\n",
+    "    return prediction"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 75,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def predict_randomforestregress(X, y):\n",
+    "    # build model\n",
+    "    X_train, X_test, y_train, y_test = train_test_split(X, y, random_state = 42)\n",
+    "    \n",
+    "    rf = RandomForestRegressor(n_estimators = 800, min_samples_split = 2, min_samples_leaf = 1, \n",
+    "      max_features = 'log2', max_depth = 70, bootstrap = False)\n",
+    "    rf.fit(X_train, y_train)\n",
+    "    \n",
+    "    # quantify quality of prediction\n",
+    "    y_predict = rf.predict(X_test)\n",
+    "    r_2_score = r2_score(y_test, y_predict)\n",
+    "    rmsle = math.sqrt(mean_squared_log_error(y_test, y_predict))\n",
+    "    \n",
+    "    ret_stmt = 'R^2 Score: ' + str(r_2_score) + '\\n' + 'RMSLE: ' + str(rmsle)\n",
+    "    \n",
+    "    # save model on disk\n",
+    "    # with open(path, \"wb\") as file:\n",
+    "    #    pickle.dump(rf, file)\n",
+    "\n",
+    "    return ret_stmt"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 76,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "/opt/anaconda3/lib/python3.7/site-packages/sklearn/utils/validation.py:71: FutureWarning: Pass k=22 as keyword args. From version 0.25 passing these as positional arguments will result in an error\n",
+      "  FutureWarning)\n"
+     ]
+    },
+    {
+     "data": {
+      "text/plain": [
+       "'R^2 Score: 0.8857510456945724\\nRMSLE: 0.14962221659067274'"
+      ]
+     },
+     "execution_count": 76,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "predict()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.7.4"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
