@@ -12,8 +12,12 @@ import numpy as np
 import pandas as pd
 import math
 import os.path
+import json
+import requests
+import shutil
 
-from flask import request
+from flask import request, Flask, flash, redirect, url_for
+from werkzeug.utils import secure_filename
 from pandas.plotting import scatter_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
@@ -26,12 +30,8 @@ from sklearn import preprocessing
 from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder
 from sklearn.feature_selection import SelectKBest, f_regression, chi2, f_classif
 from sklearn.linear_model import LinearRegression, LogisticRegression
-
-
-UPLOAD_FOLDER = '/path/to/the/uploads'
     
-def regress_feature_selection_transformation(X, y, target, ordinal_feature, route):
-    
+def regress_feature_selection_transformation(X, y, target, ordinal_feature, route, path):
     def train_num_feature_selection(X_num):
         # saleprice correlation matrix
         k_num = round(len(X_num.columns) / 2)
@@ -88,7 +88,8 @@ def regress_feature_selection_transformation(X, y, target, ordinal_feature, rout
         return (X_cat_enc, fs)
     
     def predict_num_feature_selection(X_num):
-        with open('fs_values.pkl', 'rb') as file:
+        directory = path + '/fs_values.pkl'
+        with open(directory, 'rb') as file:
             drop_multicoll_features, drop_corr_features = pickle.load(file)[:2]
             
         X_num = X_num.drop(drop_multicoll_features, axis = 1) 
@@ -97,7 +98,8 @@ def regress_feature_selection_transformation(X, y, target, ordinal_feature, rout
         return X_num
     
     def predict_cat_feature_selection(X_cat_enc):
-        with open('fs_values.pkl', 'rb') as file:
+        directory = path + '/fs_values.pkl'
+        with open(directory, 'rb') as file:
             selected_cat_features, dummy = pickle.load(file)[2:4]
             
         X_cat_fs = selected_cat_features.transform(X_cat_enc)
@@ -188,13 +190,13 @@ def regress_feature_selection_transformation(X, y, target, ordinal_feature, rout
     if route == '/train':
         # serialize feature selection values
         fs_values = [drop_multicoll_features, drop_corr_features, selected_cat_features, ordinal_feature, target]
-        with open('fs_values.pkl', 'wb') as file:
+        directory = path + '/fs_values.pkl'
+        with open(directory, 'wb') as file:
             pickle.dump(fs_values, file)
         
     return X
 
-def class_feature_selection_transformation(X, y, target, ordinal_feature, route):
-    
+def class_feature_selection_transformation(X, y, target, ordinal_feature, route, path):
     def train_num_feature_selection(X_num):
         # feature selection on numerical data
         k_num = round(len(X_num.columns) / 2)
@@ -213,7 +215,8 @@ def class_feature_selection_transformation(X, y, target, ordinal_feature, route)
         return (X_cat_enc, fs)
     
     def predict_num_feature_selection(X_num):
-        with open('fs_values.pkl', 'rb') as file:
+        directory = path + '/fs_values.pkl'
+        with open(directory, 'rb') as file:
             selected_num_features, dummy = pickle.load(file)[0:2]
             
         X_num_fs = selected_num_features.transform(X_num)
@@ -222,7 +225,8 @@ def class_feature_selection_transformation(X, y, target, ordinal_feature, route)
         return X_num
     
     def predict_cat_feature_selection(X_cat_enc):
-        with open('fs_values.pkl', 'rb') as file:
+        directory = path + '/fs_values.pkl'
+        with open(directory, 'rb') as file:
             dummy, selected_cat_features = pickle.load(file)[0:2]
             
         X_cat_fs = selected_cat_features.transform(X_cat_enc)
@@ -316,7 +320,8 @@ def class_feature_selection_transformation(X, y, target, ordinal_feature, route)
     if route == '/train':
         # serialize feature selection values
         fs_values = [selected_num_features, selected_cat_features, ordinal_feature, target]
-        with open('fs_values.pkl', 'wb') as file:
+        directory = path + '/fs_values.pkl'
+        with open(directory, 'wb') as file:
             pickle.dump(fs_values, file)
             
     return X
@@ -391,45 +396,48 @@ def predict_logisticregress(X, y, target):
 # app definition
 app = flask.Flask(__name__)
 app.config['DEBUG'] = True
+UPLOAD_FOLDER = '/path/to/the/uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
     
 @app.route('/train', methods=['POST'])
 def train():
-    
-    def predict_regress(feature_engineering, y, target):
+    def predict_regress(feature_engineering, y, target, path):
         rf, rf_r2 = predict_randomforestregress(feature_engineering, y, target)
         reg, reg_r2 = predict_linearregress(feature_engineering, y, target)
         
         best_score = max([rf_r2, reg_r2])
+        directory_model = path + '/model.pkl'
         
         # save best model on disk
         if best_score == rf_r2:
-            with open('model.pkl', 'wb') as file:
+            with open(directory_model, 'wb') as file:
                 pickle.dump(rf, file)
-                model = 'RandomForestRegressor: '
+                model = 'RandomForestRegressor'
                 return (model, rf_r2)
             
         elif best_score == reg_r2:
-            with open('model.pkl', 'wb') as file:
+            with open(directory_model, 'wb') as file:
                 pickle.dump(reg, file)
-                model = 'LinearRegression: '
+                model = 'LinearRegression'
                 return (model, reg_r2)
             
-    def predict_class(feature_engineering, y, target):
+    def predict_class(feature_engineering, y, target, path):
         rf, rf_acc = predict_randomforestclass(feature_engineering, y, target)
         log_reg, log_acc = predict_logisticregress(feature_engineering, y, target)
         
         best_score = max([rf_acc, log_acc])
-
+        directory_model = path + '/model.pkl'
+        
         # save best model on disk
         if best_score == rf_acc:
-            with open('model.pkl', 'wb') as file:
+            with open(directory_model, 'wb') as file:
                 pickle.dump(rf, file)
-                model = 'RandomForestClassifier: '
+                model = 'RandomForestClassifier'
                 return (model, rf_acc)
         elif best_score == log_acc:
-            with open('model.pkl', 'wb') as file:
+            with open(directory_model, 'wb') as file:
                 pickle.dump(log_reg, file)
-                model = 'LinearRegression: '
+                model = 'LinearRegression'
                 return (model, log_acc)
             
     route = request.path
@@ -442,36 +450,38 @@ def train():
     del_feature = request.args.get('del_feature')
     ordinal_feature = request.args.get('ordinal_feature')
     model_type = request.args.get('model_type')
+    model_name = request.args['model_name']
     
-    # select features and target variable
-    features = list(train_data)
-    X = train_data[features]
-    y = train_data[target]
-    
-    if model_type is None:
-        if train_data[target].dtypes == np.object:
-            feature_engineering = class_feature_selection_transformation(X, y, target, ordinal_feature, route)
-            model, best_score = predict_class(feature_engineering, y, target)
-            prediction = model + 'Accuracy Score: ' + str(best_score) 
-            return prediction
+    path = model_name
+    if os.path.exists(path):
+        return json.dumps({'Error': "Model already exists"})
+    else:
+        os.mkdir(path)
+        # select features and target variable
+        features = list(train_data)
+        X = train_data[features]
+        y = train_data[target]
         
-        elif train_data[target].dtypes == np.float or train_data[target].dtypes == np.int:
-            feature_engineering = regress_feature_selection_transformation(X, y, target, ordinal_feature, route)
-            model, best_score = predict_regress(feature_engineering, y, target)
-            prediction = model + 'R^2 Score: ' + str(best_score) 
-            return prediction
+        if model_type is None:
+            if train_data[target].dtypes == np.object:
+                feature_engineering = class_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
+                model, best_score = predict_class(feature_engineering, y, target, path)
+                return json.dumps({'model': model, 'accuracy score': best_score, 'model name': path}, sort_keys = True, indent=4, separators=(',', ': '))
+            
+            elif train_data[target].dtypes == np.float or train_data[target].dtypes == np.int:
+                feature_engineering = regress_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
+                model, best_score = predict_regress(feature_engineering, y, target, path)
+                return json.dumps({'model': model, 'accuracy score': best_score, 'model name': path}, sort_keys = True, indent=4, separators=(',', ': '))
+            
+        elif model_type == 'classifier':
+            feature_engineering = class_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
+            model, best_score = predict_class(feature_engineering, y, target, path)
+            return json.dumps({'model': model, 'r2 score': best_score, 'model name': path}, sort_keys = True, indent=4, separators=(',', ': '))
         
-    elif model_type == 'classifier':
-        feature_engineering = class_feature_selection_transformation(X, y, target, ordinal_feature, route)
-        model, best_score = predict_class(feature_engineering, y, target)
-        prediction = model + 'Accuracy Score: ' + str(best_score) 
-        return prediction
-    
-    elif model_type == 'regressor':
-        feature_engineering = regress_feature_selection_transformation(X, y, target, ordinal_feature, route)
-        model, best_score = predict_regress(feature_engineering, y, target)
-        prediction = model + 'R^2 Score: ' + str(best_score) 
-        return prediction
+        elif model_type == 'regressor':
+            feature_engineering = regress_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
+            model, best_score = predict_regress(feature_engineering, y, target, path)
+            return json.dumps({'model': model, 'r2 score': best_score, 'model name': path}, sort_keys = True, indent=4, separators=(',', ': '))
     
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -479,32 +489,51 @@ def predict():
     # retrieve data
     data = request.get_json(force = True)
     test_data = pd.DataFrame(data)
+    model_name = request.args['model_name']
 
-    with open('fs_values.pkl', 'rb') as file:
+    path = model_name
+    directory_fs = path + '/fs_values.pkl'
+    directory_model = path + '/model.pkl'
+    with open(directory_fs, 'rb') as file:
         unpickler = pickle.Unpickler(file);
         fs_values = unpickler.load();
         if len(fs_values) == 5:
             ordinal_feature, target = fs_values[3:] # regressor
         elif len(fs_values) == 4:
             ordinal_feature, target = fs_values[2:] # classifier
-    with open('model.pkl', 'rb') as file:
+    with open(directory_model, 'rb') as file:
         model = pickle.load(file)
 
-    feature_engineering = regress_feature_selection_transformation(test_data, None, None, ordinal_feature, route)
+    feature_engineering = regress_feature_selection_transformation(test_data, None, None, ordinal_feature, route, path)
     y_predict = model.predict(feature_engineering)
     
-    df_features = pd.DataFrame(test_data)
+    df_1stcolumn = pd.DataFrame(test_data.iloc[:,0])
     df_prediction = pd.DataFrame({target: y_predict})
-    output = pd.concat([df_features, df_prediction], axis = 1, sort = False)
-    output.to_csv('prediction.csv', index = False)
-    output.describe()
-
-
-    # os.remove('fs_values.pkl')
-    # os.remove('del_feature.pkl')
+    df_1stcolumn = df_1stcolumn.reset_index(drop = True)
+    df_prediction = df_prediction.reset_index(drop = True)
+    output = df_1stcolumn.merge(df_prediction, left_index = True, right_index = True)
+    result = output.to_json(orient = 'records')
+    parsed = json.loads(result)
     
-    return "Successful"
+    return json.dumps(parsed, indent = 4)
 
-    
-app.run(debug=True)
+@app.route('/status', methods=['GET'])
+def status():
+    model_name = request.args['model_name']
+    if os.path.exists(model_name):
+        return json.dumps({'Message': 'Model is available'})
+    else:
+        return json.dumps({'Message': 'Model is not available yet'})
+
+@app.route('/delete', methods=['GET'])
+def delete():
+    target = request.args['target']
+    if os.path.exists(target):
+        shutil.rmtree(target, ignore_errors = True)
+        return json.dumps({'Message': 'Directory successfully removed'})
+    else:
+        return json.dumps({'Error': 'Directory does not exist'})
+
+if __name__ == "__main__":
+    app.run(debug = True)
                                 
