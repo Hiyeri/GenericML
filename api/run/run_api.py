@@ -15,6 +15,7 @@ import os.path
 import json
 import requests
 import shutil
+import threading
 
 from flask import request, Flask, flash, redirect, url_for
 from werkzeug.utils import secure_filename
@@ -393,14 +394,7 @@ def predict_logisticregress(X, y, target):
     model = (log_reg, acc_score)
     return model
 
-# app definition
-app = flask.Flask(__name__)
-app.config['DEBUG'] = True
-UPLOAD_FOLDER = '/path/to/the/uploads'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-    
-@app.route('/train', methods=['POST'])
-def train():
+def build_model(path, target, ordinal_feature, route, model_type):
     def predict_regress(feature_engineering, y, target, path):
         rf, rf_r2 = predict_randomforestregress(feature_engineering, y, target)
         reg, reg_r2 = predict_linearregress(feature_engineering, y, target)
@@ -413,13 +407,15 @@ def train():
             with open(directory_model, 'wb') as file:
                 pickle.dump(rf, file)
                 model = 'RandomForestRegressor'
-                return (model, rf_r2)
+                scoring_param = 'r2 score'
+                return (model, scoring_param, rf_r2)
             
         elif best_score == reg_r2:
             with open(directory_model, 'wb') as file:
                 pickle.dump(reg, file)
                 model = 'LinearRegression'
-                return (model, reg_r2)
+                scoring_param = 'r2 score'
+                return (model, scoring_param, reg_r2)
             
     def predict_class(feature_engineering, y, target, path):
         rf, rf_acc = predict_randomforestclass(feature_engineering, y, target)
@@ -433,13 +429,66 @@ def train():
             with open(directory_model, 'wb') as file:
                 pickle.dump(rf, file)
                 model = 'RandomForestClassifier'
-                return (model, rf_acc)
+                scoring_param = 'accuracy score'
+                return (model, scoring_param, rf_acc)
         elif best_score == log_acc:
             with open(directory_model, 'wb') as file:
                 pickle.dump(log_reg, file)
-                model = 'LinearRegression'
-                return (model, log_acc)
+                model = 'LogisticRegression'
+                scoring_param = 'accuracy score'
+                return (model, scoring_param, log_acc)
+    
+    directory = path + '/train_data.pkl'
+    with open(directory, 'rb') as file:
+        train_data = pickle.load(file)
+        
+    # select features and target variable
+    features = list(train_data)
+    X = train_data[features]
+    y = train_data[target]
+    
+    if model_type is None:
+        if train_data[target].dtypes == np.object:
+            feature_engineering = class_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
+            model, scoring_param, best_score = predict_class(feature_engineering, y, target, path)
+            model_stats = [model, scoring_param, best_score, path]
+            directory = path + '/model_stats.pkl'
+            with open(directory, 'wb') as file:
+                pickle.dump(model_stats, file)
+                
+        elif train_data[target].dtypes == np.float or train_data[target].dtypes == np.int:
+            feature_engineering = regress_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
+            model, scoring_param, best_score = predict_regress(feature_engineering, y, target, path)
+            model_stats = [model, scoring_param, best_score, path]
+            directory = path + '/model_stats.pkl'
+            with open(directory, 'wb') as file:
+                pickle.dump(model_stats, file)
+             
+    elif model_type == 'classifier':
+        feature_engineering = class_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
+        model, scoring_param, best_score = predict_class(feature_engineering, y, target, path)
+        model_stats = [model, scoring_param, best_score, path]
+        directory = path + '/model_stats.pkl'
+        with open(directory, 'wb') as file:
+            pickle.dump(model_stats, file)
             
+    elif model_type == 'regressor':
+        feature_engineering = regress_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
+        model, scoring_param, best_score = predict_regress(feature_engineering, y, target, path)
+        model_stats = [model, scoring_param, best_score, path]
+        directory = path + '/model_stats.pkl'
+        with open(directory, 'wb') as file:
+            pickle.dump(model_stats, file)
+            
+
+# app definition
+app = flask.Flask(__name__)
+app.config['DEBUG'] = True
+UPLOAD_FOLDER = '/path/to/the/uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+    
+@app.route('/train', methods=['POST'])
+def train():
     route = request.path
     # retrieve data
     data = request.get_json(force = True)
@@ -457,31 +506,15 @@ def train():
         return json.dumps({'Error': "Model already exists"})
     else:
         os.mkdir(path)
-        # select features and target variable
-        features = list(train_data)
-        X = train_data[features]
-        y = train_data[target]
-        
-        if model_type is None:
-            if train_data[target].dtypes == np.object:
-                feature_engineering = class_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
-                model, best_score = predict_class(feature_engineering, y, target, path)
-                return json.dumps({'model': model, 'accuracy score': best_score, 'model name': path}, sort_keys = True, indent=4, separators=(',', ': '))
+        directory = path + '/train_data.pkl'
+        with open(directory, 'wb') as file:
+            pickle.dump(train_data, file)
             
-            elif train_data[target].dtypes == np.float or train_data[target].dtypes == np.int:
-                feature_engineering = regress_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
-                model, best_score = predict_regress(feature_engineering, y, target, path)
-                return json.dumps({'model': model, 'accuracy score': best_score, 'model name': path}, sort_keys = True, indent=4, separators=(',', ': '))
-            
-        elif model_type == 'classifier':
-            feature_engineering = class_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
-            model, best_score = predict_class(feature_engineering, y, target, path)
-            return json.dumps({'model': model, 'r2 score': best_score, 'model name': path}, sort_keys = True, indent=4, separators=(',', ': '))
+        download_thread = threading.Thread(target = build_model, args = (path, target, ordinal_feature, route, model_type,))
+        download_thread.start()
+        return json.dumps({'Message': 'Successful'})
+    
         
-        elif model_type == 'regressor':
-            feature_engineering = regress_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
-            model, best_score = predict_regress(feature_engineering, y, target, path)
-            return json.dumps({'model': model, 'r2 score': best_score, 'model name': path}, sort_keys = True, indent=4, separators=(',', ': '))
     
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -507,10 +540,11 @@ def predict():
     feature_engineering = regress_feature_selection_transformation(test_data, None, None, ordinal_feature, route, path)
     y_predict = model.predict(feature_engineering)
     
+    # merge 1st column with prediction
     df_1stcolumn = pd.DataFrame(test_data.iloc[:,0])
     df_prediction = pd.DataFrame({target: y_predict})
-    df_1stcolumn = df_1stcolumn.reset_index(drop = True)
-    df_prediction = df_prediction.reset_index(drop = True)
+    df_1stcolumn = df_1stcolumn.reset_index(drop = True) # super important
+    df_prediction = df_prediction.reset_index(drop = True) # super important
     output = df_1stcolumn.merge(df_prediction, left_index = True, right_index = True)
     result = output.to_json(orient = 'records')
     parsed = json.loads(result)
@@ -520,8 +554,11 @@ def predict():
 @app.route('/status', methods=['GET'])
 def status():
     model_name = request.args['model_name']
-    if os.path.exists(model_name):
-        return json.dumps({'Message': 'Model is available'})
+    directory = model_name + '/model_stats.pkl'
+    if os.path.exists(directory):
+        with open(directory, 'rb') as file:
+            model, scoring_param, best_score, path = pickle.load(file)
+            return json.dumps({'model': model, scoring_param :best_score, 'model name': path}, sort_keys = True, indent = 4, separators=(',', ': '))
     else:
         return json.dumps({'Message': 'Model is not available yet'})
 
