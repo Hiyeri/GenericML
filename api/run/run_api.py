@@ -19,6 +19,7 @@ import threading
 
 from flask import request, Flask, flash, redirect, url_for
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 from pandas.plotting import scatter_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
@@ -158,9 +159,10 @@ def regress_feature_selection_transformation(X, y, target, ordinal_feature, rout
             X_num = predict_num_feature_selection(X_num)
         
     # encode ordinal features (dummy variables)
-    if ordinal_feature is not None and ordinal_feature in X_num:
-        ord_data = [ordinal_feature]
-        X_num = pd.get_dummies(X_num, columns = ord_data, drop_first = True)
+    if ordinal_feature and all(item in X_num for item in ordinal_feature):
+        for feature in ordinal_feature:
+            ord_data = [feature]
+            X_num = pd.get_dummies(X_num, columns = ord_data, drop_first = True)
 
     # encode categorical features
     if cat_features:
@@ -289,9 +291,10 @@ def class_feature_selection_transformation(X, y, target, ordinal_feature, route,
             X_num = predict_num_feature_selection(X_num)
     
     # encode ordinal features (dummy variables)
-    if ordinal_feature is not None:
-        ord_data = [ordinal_feature]
-        X_num = pd.get_dummies(X_num, columns = ord_data, drop_first = True)
+    if ordinal_feature:
+        for feature in ordinal_feature:
+            ord_data = [feature]
+            X_num = pd.get_dummies(X_num, columns = ord_data, drop_first = True)
     
     if cat_features:
         enc = OrdinalEncoder()
@@ -486,6 +489,20 @@ app = flask.Flask(__name__)
 app.config['DEBUG'] = True
 UPLOAD_FOLDER = '/path/to/the/uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+@app.errorhandler(HTTPException)
+def handle_exception(e):
+    """Return JSON instead of HTML for HTTP errors."""
+    # start with the correct headers and status code from the error
+    response = e.get_response()
+    # replace the body with JSON
+    response.data = json.dumps({
+        "code": e.code,
+        "name": e.name,
+        "description": e.description,
+    })
+    response.content_type = "application/json"
+    return response
     
 @app.route('/train', methods=['POST'])
 def train():
@@ -497,7 +514,7 @@ def train():
     # take arguments
     target = request.args['target']
     del_feature = request.args.get('del_feature')
-    ordinal_feature = request.args.get('ordinal_feature')
+    ordinal_feature = request.args.getlist('ordinal_feature')
     model_type = request.args.get('model_type')
     model_name = request.args['model_name']
     
@@ -521,8 +538,8 @@ def predict():
     route = request.path
     # retrieve data
     data = request.get_json(force = True)
-    test_data = pd.DataFrame(data)
     model_name = request.args['model_name']
+    test_data = pd.DataFrame(data)
 
     path = model_name
     directory_fs = path + '/fs_values.pkl'
