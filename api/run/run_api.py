@@ -41,7 +41,7 @@ def regress_feature_selection_transformation(X, y, target, ordinal_feature, rout
         X_num_fs = corrmat.nlargest(k_num, target)[target].index
     
         # check for multicollinearity
-        # if two features are strongly correlated with each other (>= 0.7) 
+        # if two features are strongly correlated with each other (>= 0.5) 
         # the feature with the lower correlation with the target variable is dropped
         multicorr = {}
         k = len(corrmat)
@@ -49,7 +49,7 @@ def regress_feature_selection_transformation(X, y, target, ordinal_feature, rout
             i = 1
             if feature != target:
                 while i < k - 1:
-                    if corrmat[feature][i] >= 0.7 and feature != corrmat.index[i]:
+                    if corrmat[feature][i] >= 0.5 and feature != corrmat.index[i]:
                         multicorr[feature] = corrmat.index[i], corrmat[feature][i]
                     i = i + 1
         
@@ -327,10 +327,10 @@ def class_feature_selection_transformation(X, y, target, ordinal_feature, route,
         directory = path + '/fs_values.pkl'
         with open(directory, 'wb') as file:
             pickle.dump(fs_values, file)
-            
+         
     return X
 
-def predict_randomforestregress(X, y, target):
+def train_randomforestregress(X, y, target):
     # build model
     if target in X:
         X = X.drop(target, axis = 1)
@@ -347,7 +347,7 @@ def predict_randomforestregress(X, y, target):
     
     return model
 
-def predict_linearregress(X, y, target):
+def train_linearregress(X, y, target):
     # build model
     if target in X:
         X = X.drop(target, axis = 1)
@@ -365,7 +365,7 @@ def predict_linearregress(X, y, target):
     model = (reg, r_2_score)
     return model
 
-def predict_randomforestclass(X, y, target):
+def train_randomforestclass(X, y, target):
     if target in X:
         X = X.drop(target, axis = 1)
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state = 42)
@@ -380,7 +380,7 @@ def predict_randomforestclass(X, y, target):
     model = (rf, acc_score)
     return model
 
-def predict_logisticregress(X, y, target):
+def train_logisticregress(X, y, target):
     if target in X:
         X = X.drop(target, axis = 1)
     X_scaled = preprocessing.scale(X)
@@ -398,9 +398,9 @@ def predict_logisticregress(X, y, target):
     return model
 
 def build_model(path, target, ordinal_feature, route, model_type):
-    def predict_regress(feature_engineering, y, target, path):
-        rf, rf_r2 = predict_randomforestregress(feature_engineering, y, target)
-        reg, reg_r2 = predict_linearregress(feature_engineering, y, target)
+    def train_scoring_regress(feature_engineering, y, target, path):
+        rf, rf_r2 = train_randomforestregress(feature_engineering, y, target)
+        reg, reg_r2 = train_linearregress(feature_engineering, y, target)
         
         best_score = max([rf_r2, reg_r2])
         directory_model = path + '/model.pkl'
@@ -420,9 +420,9 @@ def build_model(path, target, ordinal_feature, route, model_type):
                 scoring_param = 'r2 score'
                 return (model, scoring_param, reg_r2)
             
-    def predict_class(feature_engineering, y, target, path):
-        rf, rf_acc = predict_randomforestclass(feature_engineering, y, target)
-        log_reg, log_acc = predict_logisticregress(feature_engineering, y, target)
+    def train_scoring_class(feature_engineering, y, target, path):
+        rf, rf_acc = train_randomforestclass(feature_engineering, y, target)
+        log_reg, log_acc = train_logisticregress(feature_engineering, y, target)
         
         best_score = max([rf_acc, log_acc])
         directory_model = path + '/model.pkl'
@@ -453,7 +453,7 @@ def build_model(path, target, ordinal_feature, route, model_type):
     if model_type is None:
         if train_data[target].dtypes == np.object:
             feature_engineering = class_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
-            model, scoring_param, best_score = predict_class(feature_engineering, y, target, path)
+            model, scoring_param, best_score = train_scoring_class(feature_engineering, y, target, path)
             model_stats = [model, scoring_param, best_score, path]
             directory = path + '/model_stats.pkl'
             with open(directory, 'wb') as file:
@@ -461,7 +461,7 @@ def build_model(path, target, ordinal_feature, route, model_type):
                 
         elif train_data[target].dtypes == np.float or train_data[target].dtypes == np.int:
             feature_engineering = regress_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
-            model, scoring_param, best_score = predict_regress(feature_engineering, y, target, path)
+            model, scoring_param, best_score = train_scoring_regress(feature_engineering, y, target, path)
             model_stats = [model, scoring_param, best_score, path]
             directory = path + '/model_stats.pkl'
             with open(directory, 'wb') as file:
@@ -469,7 +469,7 @@ def build_model(path, target, ordinal_feature, route, model_type):
              
     elif model_type == 'classifier':
         feature_engineering = class_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
-        model, scoring_param, best_score = predict_class(feature_engineering, y, target, path)
+        model, scoring_param, best_score = train_scoring_class(feature_engineering, y, target, path)
         model_stats = [model, scoring_param, best_score, path]
         directory = path + '/model_stats.pkl'
         with open(directory, 'wb') as file:
@@ -477,7 +477,7 @@ def build_model(path, target, ordinal_feature, route, model_type):
             
     elif model_type == 'regressor':
         feature_engineering = regress_feature_selection_transformation(X, y, target, ordinal_feature, route, path)
-        model, scoring_param, best_score = predict_regress(feature_engineering, y, target, path)
+        model, scoring_param, best_score = train_scoring_regress(feature_engineering, y, target, path)
         model_stats = [model, scoring_param, best_score, path]
         directory = path + '/model_stats.pkl'
         with open(directory, 'wb') as file:
@@ -544,29 +544,36 @@ def predict():
     path = model_name
     directory_fs = path + '/fs_values.pkl'
     directory_model = path + '/model.pkl'
-    with open(directory_fs, 'rb') as file:
-        unpickler = pickle.Unpickler(file);
-        fs_values = unpickler.load();
+    if os.path.exists(directory_model) and os.path.exists(directory_fs):
+        with open(directory_fs, 'rb') as file:
+            unpickler = pickle.Unpickler(file);
+            fs_values = unpickler.load();
+            if len(fs_values) == 5:
+                ordinal_feature, target = fs_values[3:] # regressor
+            elif len(fs_values) == 4:
+                ordinal_feature, target = fs_values[2:] # classifier
+        with open(directory_model, 'rb') as file:
+            model = pickle.load(file)
+            
         if len(fs_values) == 5:
-            ordinal_feature, target = fs_values[3:] # regressor
+            feature_engineering = regress_feature_selection_transformation(test_data, None, None, ordinal_feature, route, path)
+            y_predict = model.predict(feature_engineering)
         elif len(fs_values) == 4:
-            ordinal_feature, target = fs_values[2:] # classifier
-    with open(directory_model, 'rb') as file:
-        model = pickle.load(file)
-
-    feature_engineering = regress_feature_selection_transformation(test_data, None, None, ordinal_feature, route, path)
-    y_predict = model.predict(feature_engineering)
-    
-    # merge 1st column with prediction
-    df_1stcolumn = pd.DataFrame(test_data.iloc[:,0])
-    df_prediction = pd.DataFrame({target: y_predict})
-    df_1stcolumn = df_1stcolumn.reset_index(drop = True) # super important
-    df_prediction = df_prediction.reset_index(drop = True) # super important
-    output = df_1stcolumn.merge(df_prediction, left_index = True, right_index = True)
-    result = output.to_json(orient = 'records')
-    parsed = json.loads(result)
-    
-    return json.dumps(parsed, indent = 4)
+            feature_engineering = class_feature_selection_transformation(test_data, None, None, ordinal_feature, route, path)
+            y_predict = model.predict(feature_engineering)
+        
+        # merge 1st column with prediction
+        df_1stcolumn = pd.DataFrame(test_data.iloc[:,0])
+        df_prediction = pd.DataFrame({target: y_predict})
+        df_1stcolumn = df_1stcolumn.reset_index(drop = True) # super important
+        df_prediction = df_prediction.reset_index(drop = True) # super important
+        output = df_1stcolumn.merge(df_prediction, left_index = True, right_index = True)
+        result = output.to_json(orient = 'records')
+        parsed = json.loads(result)
+        
+        return json.dumps(parsed, indent = 4)
+    else:
+        return json.dumps({'Error': 'Model does not exist'})
 
 @app.route('/status', methods=['GET'])
 def status():
@@ -581,9 +588,9 @@ def status():
 
 @app.route('/delete', methods=['GET'])
 def delete():
-    target = request.args['target']
-    if os.path.exists(target):
-        shutil.rmtree(target, ignore_errors = True)
+    model_name = request.args['model_name']
+    if os.path.exists(model_name):
+        shutil.rmtree(model_name, ignore_errors = True)
         return json.dumps({'Message': 'Directory successfully removed'})
     else:
         return json.dumps({'Error': 'Directory does not exist'})
